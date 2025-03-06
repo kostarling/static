@@ -4,8 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Генерация видео с TTS</title>
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@latest"></script>
-
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6"></script>
     <style>
         body { font-family: Arial, sans-serif; text-align: center; margin: 50px; }
         input, button, textarea { margin-top: 10px; padding: 10px; font-size: 16px; }
@@ -25,7 +24,7 @@
 
     <input type="file" id="imageInput" accept="image/*">
     <textarea id="textInput" placeholder="Введите текст для озвучки"></textarea>
-    <button onclick="generateVideo()">Создать видео</button>
+    <button id="generateBtn">Создать видео</button>
 
     <div class="progress-container">
         <div class="progress-bar" id="progressBar">0%</div>
@@ -36,11 +35,16 @@
     <a id="downloadLink" style="display: none;">Скачать видео</a>
 
     <script>
-        async function checkAvailability() {
-            // Проверка Web Speech API
+        document.getElementById("generateBtn").addEventListener("click", async () => {
+            checkWebSpeechAPI();
+            await checkFFmpeg();
+        });
+
+        function checkWebSpeechAPI() {
+            const speechStatus = document.getElementById("speechStatus");
+
             speechSynthesis.onvoiceschanged = () => {
                 const voices = speechSynthesis.getVoices();
-                const speechStatus = document.getElementById("speechStatus");
                 if (voices.length > 0) {
                     speechStatus.innerHTML = "✅ Доступно";
                     speechStatus.classList.add("available");
@@ -49,8 +53,9 @@
                     speechStatus.classList.add("unavailable");
                 }
             };
+        }
 
-            // Проверка FFmpeg.wasm
+        async function checkFFmpeg() {
             const { createFFmpeg } = FFmpeg;
             const ffmpeg = createFFmpeg({ log: true });
             const ffmpegStatus = document.getElementById("ffmpegStatus");
@@ -82,7 +87,7 @@
 
             updateProgress(10, "Генерация озвучки...");
 
-            // 1. Создание TTS-аудио и скачивание
+            // 1. Создание TTS-аудио
             const audioBlob = await textToSpeech(textInput);
             const audioFile = new File([audioBlob], "speech.mp3", { type: "audio/mp3" });
 
@@ -99,6 +104,8 @@
                 "-loop", "1",
                 "-i", "image.jpg",
                 "-i", "speech.mp3",
+                "-t", "5",
+                "-r", "30",
                 "-vf", "scale=800:600",
                 "-c:v", "libx264",
                 "-c:a", "aac",
@@ -126,35 +133,20 @@
             updateProgress(100, "Готово!");
         }
 
-        // Функция TTS (скачивание звука)
-        async function textToSpeech(text) {
+        function textToSpeech(text) {
             return new Promise((resolve) => {
                 const utterance = new SpeechSynthesisUtterance(text);
                 const synth = window.speechSynthesis;
-                const voices = synth.getVoices();
-                utterance.voice = voices.find(v => v.lang.startsWith("ru")) || voices[0];
-
-                // Создаём аудиофайл
                 const audioContext = new AudioContext();
                 const dest = audioContext.createMediaStreamDestination();
                 const recorder = new MediaRecorder(dest.stream);
                 const chunks = [];
 
-                recorder.ondataavailable = (e) => chunks.push(e.data);
-                recorder.onstop = () => {
-                    const audioBlob = new Blob(chunks, { type: "audio/mp3" });
-                    resolve(audioBlob);
-
-                    // Создаём ссылку для скачивания звука
-                    const audioUrl = URL.createObjectURL(audioBlob);
-                    const audioLink = document.createElement("a");
-                    audioLink.href = audioUrl;
-                    audioLink.download = "speech.mp3";
-                    audioLink.innerText = "Скачать озвучку";
-                    document.body.appendChild(audioLink);
-                };
-
+                utterance.voice = synth.getVoices().find(v => v.lang.startsWith("ru")) || synth.getVoices()[0];
                 utterance.onend = () => recorder.stop();
+
+                recorder.ondataavailable = (e) => chunks.push(e.data);
+                recorder.onstop = () => resolve(new Blob(chunks, { type: "audio/mp3" }));
 
                 const source = audioContext.createMediaStreamSource(dest.stream);
                 source.connect(audioContext.destination);
@@ -163,7 +155,6 @@
             });
         }
 
-        // Функция обновления прогресса
         function updateProgress(percent, message) {
             const bar = document.getElementById("progressBar");
             bar.style.width = percent + "%";
@@ -171,9 +162,10 @@
             document.getElementById("status").innerText = message;
         }
 
-        // Проверка доступности API при загрузке страницы
         window.onload = () => {
-            setTimeout(checkAvailability, 500);
+            if (window.location.protocol === "file:") {
+                alert("❌ FFmpeg не работает в режиме file://\nЗапустите локальный сервер!");
+            }
         };
     </script>
 </body>
