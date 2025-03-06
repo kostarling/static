@@ -37,19 +37,21 @@
     <script>
         async function checkAvailability() {
             // Проверка Web Speech API
-            const voices = speechSynthesis.getVoices();
-            const speechStatus = document.getElementById("speechStatus");
-            if (voices.length > 0) {
-                speechStatus.innerHTML = "✅ Доступно";
-                speechStatus.classList.add("available");
-            } else {
-                speechStatus.innerHTML = "❌ Заблокировано";
-                speechStatus.classList.add("unavailable");
-            }
+            speechSynthesis.onvoiceschanged = () => {
+                const voices = speechSynthesis.getVoices();
+                const speechStatus = document.getElementById("speechStatus");
+                if (voices.length > 0) {
+                    speechStatus.innerHTML = "✅ Доступно";
+                    speechStatus.classList.add("available");
+                } else {
+                    speechStatus.innerHTML = "❌ Заблокировано";
+                    speechStatus.classList.add("unavailable");
+                }
+            };
 
             // Проверка FFmpeg.wasm
             const { createFFmpeg } = FFmpeg;
-            const ffmpeg = createFFmpeg({ log: false });
+            const ffmpeg = createFFmpeg({ log: true });
             const ffmpegStatus = document.getElementById("ffmpegStatus");
 
             try {
@@ -79,7 +81,7 @@
 
             updateProgress(10, "Генерация озвучки...");
 
-            // 1. Создание TTS-аудио
+            // 1. Создание TTS-аудио и скачивание
             const audioBlob = await textToSpeech(textInput);
             const audioFile = new File([audioBlob], "speech.mp3", { type: "audio/mp3" });
 
@@ -96,8 +98,6 @@
                 "-loop", "1",
                 "-i", "image.jpg",
                 "-i", "speech.mp3",
-                "-t", "5",
-                "-r", "30",
                 "-vf", "scale=800:600",
                 "-c:v", "libx264",
                 "-c:a", "aac",
@@ -125,21 +125,35 @@
             updateProgress(100, "Готово!");
         }
 
-        // Функция TTS (Web Speech API)
-        function textToSpeech(text) {
+        // Функция TTS (скачивание звука)
+        async function textToSpeech(text) {
             return new Promise((resolve) => {
                 const utterance = new SpeechSynthesisUtterance(text);
                 const synth = window.speechSynthesis;
+                const voices = synth.getVoices();
+                utterance.voice = voices.find(v => v.lang.startsWith("ru")) || voices[0];
+
+                // Создаём аудиофайл
                 const audioContext = new AudioContext();
                 const dest = audioContext.createMediaStreamDestination();
                 const recorder = new MediaRecorder(dest.stream);
                 const chunks = [];
 
-                utterance.voice = synth.getVoices().find(v => v.lang.startsWith("ru")) || synth.getVoices()[0];
-                utterance.onend = () => recorder.stop();
-
                 recorder.ondataavailable = (e) => chunks.push(e.data);
-                recorder.onstop = () => resolve(new Blob(chunks, { type: "audio/mp3" }));
+                recorder.onstop = () => {
+                    const audioBlob = new Blob(chunks, { type: "audio/mp3" });
+                    resolve(audioBlob);
+
+                    // Создаём ссылку для скачивания звука
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    const audioLink = document.createElement("a");
+                    audioLink.href = audioUrl;
+                    audioLink.download = "speech.mp3";
+                    audioLink.innerText = "Скачать озвучку";
+                    document.body.appendChild(audioLink);
+                };
+
+                utterance.onend = () => recorder.stop();
 
                 const source = audioContext.createMediaStreamSource(dest.stream);
                 source.connect(audioContext.destination);
