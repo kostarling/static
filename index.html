@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Генерация видео с TTS</title>
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6"></script>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin: 50px; }
+        input, button, textarea { margin-top: 10px; padding: 10px; font-size: 16px; }
+        video { display: none; margin-top: 20px; width: 80%; }
+        .progress-container { width: 80%; background: #ddd; border-radius: 5px; margin: 20px auto; }
+        .progress-bar { height: 20px; width: 0%; background: green; border-radius: 5px; text-align: center; color: white; }
+        .status { font-size: 14px; margin-top: 10px; }
+        .available { color: green; font-weight: bold; }
+        .unavailable { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Создание видео с озвучкой</h1>
+
+    <p class="status">Web Speech API: <span id="speechStatus">⏳ Проверка...</span></p>
+    <p class="status">FFmpeg.wasm: <span id="ffmpegStatus">⏳ Проверка...</span></p>
+
+    <input type="file" id="imageInput" accept="image/*">
+    <textarea id="textInput" placeholder="Введите текст для озвучки"></textarea>
+    <button onclick="generateVideo()">Создать видео</button>
+
+    <div class="progress-container">
+        <div class="progress-bar" id="progressBar">0%</div>
+    </div>
+
+    <p id="status"></p>
+    <video id="videoPreview" controls></video>
+    <a id="downloadLink" style="display: none;">Скачать видео</a>
+
+    <script>
+        async function checkAvailability() {
+            // Проверка Web Speech API
+            const voices = speechSynthesis.getVoices();
+            const speechStatus = document.getElementById("speechStatus");
+            if (voices.length > 0) {
+                speechStatus.innerHTML = "✅ Доступно";
+                speechStatus.classList.add("available");
+            } else {
+                speechStatus.innerHTML = "❌ Заблокировано";
+                speechStatus.classList.add("unavailable");
+            }
+
+            // Проверка FFmpeg.wasm
+            const { createFFmpeg } = FFmpeg;
+            const ffmpeg = createFFmpeg({ log: false });
+            const ffmpegStatus = document.getElementById("ffmpegStatus");
+
+            try {
+                await ffmpeg.load();
+                ffmpegStatus.innerHTML = "✅ Доступно";
+                ffmpegStatus.classList.add("available");
+            } catch (e) {
+                ffmpegStatus.innerHTML = "❌ Заблокировано";
+                ffmpegStatus.classList.add("unavailable");
+            }
+        }
+
+        async function generateVideo() {
+            const { createFFmpeg, fetchFile } = FFmpeg;
+            const ffmpeg = createFFmpeg({ log: true });
+
+            const fileInput = document.getElementById("imageInput");
+            const textInput = document.getElementById("textInput").value.trim();
+            if (!fileInput.files.length) {
+                alert("Выберите изображение!");
+                return;
+            }
+            if (!textInput) {
+                alert("Введите текст!");
+                return;
+            }
+
+            updateProgress(10, "Генерация озвучки...");
+
+            // 1. Создание TTS-аудио
+            const audioBlob = await textToSpeech(textInput);
+            const audioFile = new File([audioBlob], "speech.mp3", { type: "audio/mp3" });
+
+            updateProgress(30, "Загрузка FFmpeg...");
+            await ffmpeg.load();
+
+            ffmpeg.FS("writeFile", "image.jpg", await fetchFile(fileInput.files[0]));
+            ffmpeg.FS("writeFile", "speech.mp3", await fetchFile(audioFile));
+
+            updateProgress(50, "Генерация видео...");
+
+            // 2. Генерация видео с голосом
+            await ffmpeg.run(
+                "-loop", "1",
+                "-i", "image.jpg",
+                "-i", "speech.mp3",
+                "-t", "5",
+                "-r", "30",
+                "-vf", "scale=800:600",
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-shortest",
+                "-pix_fmt", "yuv420p",
+                "output.mp4"
+            );
+
+            updateProgress(90, "Обработка видео...");
+
+            const data = ffmpeg.FS("readFile", "output.mp4");
+            const blob = new Blob([data.buffer], { type: "video/mp4" });
+            const url = URL.createObjectURL(blob);
+
+            document.getElementById("videoPreview").src = url;
+            document.getElementById("videoPreview").style.display = "block";
+
+            const downloadLink = document.getElementById("downloadLink");
+            downloadLink.href = url;
+            downloadLink.download = "video.mp4";
+            downloadLink.innerText = "Скачать видео";
+            downloadLink.style.display = "block";
+
+            updateProgress(100, "Готово!");
+        }
+
+        // Функция TTS (Web Speech API)
+        function textToSpeech(text) {
+            return new Promise((resolve) => {
+                const utterance = new SpeechSynthesisUtterance(text);
+                const synth = window.speechSynthesis;
+                const audioContext = new AudioContext();
+                const dest = audioContext.createMediaStreamDestination();
+                const recorder = new MediaRecorder(dest.stream);
+                const chunks = [];
+
+                utterance.voice = synth.getVoices().find(v => v.lang.startsWith("ru")) || synth.getVoices()[0];
+                utterance.onend = () => recorder.stop();
+
+                recorder.ondataavailable = (e) => chunks.push(e.data);
+                recorder.onstop = () => resolve(new Blob(chunks, { type: "audio/mp3" }));
+
+                const source = audioContext.createMediaStreamSource(dest.stream);
+                source.connect(audioContext.destination);
+                recorder.start();
+                synth.speak(utterance);
+            });
+        }
+
+        // Функция обновления прогресса
+        function updateProgress(percent, message) {
+            const bar = document.getElementById("progressBar");
+            bar.style.width = percent + "%";
+            bar.innerText = percent + "%";
+            document.getElementById("status").innerText = message;
+        }
+
+        // Проверка доступности API при загрузке страницы
+        window.onload = () => {
+            setTimeout(checkAvailability, 500);
+        };
+    </script>
+</body>
+</html>
